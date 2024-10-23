@@ -8,36 +8,46 @@ import time
 pygame.mixer.init()
 
 # Function to play a video with sound
-def play_video(video_path, interrupt_event):
+def play_video(video_path, interrupt_event, loop=False):
     print(f"Attempting to play video: {video_path}")
-    cap = cv2.VideoCapture(video_path)
-    if not cap.isOpened():
-        print(f"Error: Could not open video {video_path}")
-        return
-    
-    # Assume the audio file has the same name as the video file but with .mp3 extension
-    audio_path = video_path.rsplit('.', 1)[0] + '.mp3'
-    
-    cv2.namedWindow('Video Player', cv2.WINDOW_NORMAL)
-    cv2.resizeWindow('Video Player', 640, 480)
-    
-    if audio_path:
-        pygame.mixer.music.load(audio_path)
-        pygame.mixer.music.play()
-    
-    while cap.isOpened() and not interrupt_event.is_set():
-        ret, frame = cap.read()
-        if not ret:
-            print("Error: Frame not read properly.")
+    while True:
+        cap = cv2.VideoCapture(video_path)
+        if not cap.isOpened():
+            print(f"Error: Could not open video {video_path}")
+            time.sleep(0.5)  # wait before retrying
+            continue
+        
+        # Assume the audio file has the same name as the video file but with .mp3 extension
+        audio_path = video_path.rsplit('.', 1)[0] + '.mp3'
+        
+        cv2.namedWindow('Video Player', cv2.WINDOW_NORMAL)
+        cv2.resizeWindow('Video Player', 640, 480)
+        
+        if audio_path:
+            try:
+                pygame.mixer.music.load(audio_path)
+                pygame.mixer.music.play()
+            except pygame.error as e:
+                print(f"Error loading audio: {e}")
+        
+        while cap.isOpened() and not interrupt_event.is_set():
+            ret, frame = cap.read()
+            if not ret:
+                print("Error: Frame not read properly.")
+                break
+            cv2.imshow('Video Player', frame)
+            if cv2.waitKey(1) & 0xFF == ord('q'):
+                interrupt_event.set()
+                break
+        
+        cap.release()
+        pygame.mixer.music.stop()
+        cv2.destroyAllWindows()
+        
+        if not loop:
             break
-        cv2.imshow('Video Player', frame)
-        if cv2.waitKey(1) & 0xFF == ord('q'):
-            interrupt_event.set()
+        if interrupt_event.is_set():
             break
-    
-    cap.release()
-    pygame.mixer.music.stop()
-    cv2.destroyAllWindows()
 
 # Function to fetch chat messages and return the next video path
 def fetch_chat(video_id, queue):
@@ -45,7 +55,7 @@ def fetch_chat(video_id, queue):
     while chat.is_alive():
         for message in chat.get().sync_items():
             input_text = message.message.lower()
-            print(f"Chat message: {input_text}")
+            print(f"{input_text}")
             if input_text == "stop":
                 queue.put("stop")
                 return
@@ -67,8 +77,7 @@ def video_manager(video_id):
     default_video_path = 'default_video.mp4'
     interrupt_event = multiprocessing.Event()
 
-    # Play default video in a separate process
-    default_process = multiprocessing.Process(target=play_video, args=(default_video_path, interrupt_event))
+    default_process = multiprocessing.Process(target=play_video, args=(default_video_path, interrupt_event, True))
     default_process.start()
 
     while True:
@@ -79,13 +88,17 @@ def video_manager(video_id):
                 break
             else:
                 interrupt_event.set()
+                default_process.terminate()
                 default_process.join()
                 interrupt_event.clear()
-                play_video(next_video, interrupt_event)
-                default_process = multiprocessing.Process(target=play_video, args=(default_video_path, interrupt_event))
+                keyword_process = multiprocessing.Process(target=play_video, args=(next_video, interrupt_event))
+                keyword_process.start()
+                keyword_process.join()
+                interrupt_event.clear()
+                default_process = multiprocessing.Process(target=play_video, args=(default_video_path, interrupt_event, True))
                 default_process.start()
 
-        time.sleep(0.1)  # Small sleep to prevent CPU overuse
+        time.sleep(0.05)  # Small sleep to prevent CPU overuse
 
     chat_process.terminate()
     chat_process.join()
